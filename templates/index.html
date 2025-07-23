@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Fleet Route Optimization</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+  <style>
+    body, html { margin: 0; height: 100%; }
+    #map { height: 90vh; }
+    #controls {
+      padding: 10px;
+      background: #fff;
+      display: flex;
+      gap: 10px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    input { flex: 1; padding: 8px; font-size: 14px; }
+    button {
+      padding: 8px 12px;
+      font-size: 14px;
+      background: #007bff;
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      border-radius: 3px;
+    }
+    button:hover { background: #0056b3; }
+  </style>
+</head>
+<body>
+
+<div id="controls">
+  <input type="text" id="destination" placeholder="Enter destination..." />
+  <button id="routeBtn">Show Routes</button>
+</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const apiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImMyY2U2ZTg2MzM3MTRiOTc5MjI4YTUyODU5ZTEyYzUyIiwiaCI6Im11cm11cjY0In0='; // 🔐 Replace with your actual key
+
+  const map = L.map('map').fitWorld();
+  let currentLocation = null;
+  let destMarker = null;
+  let routeLayers = [];
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  map.locate({ setView: true, maxZoom: 16 });
+  map.on('locationfound', e => {
+    currentLocation = [e.latlng.lat, e.latlng.lng];
+    L.marker(currentLocation).addTo(map).bindPopup("You are here").openPopup();
+  });
+  map.on('locationerror', () => alert("Location error: allow browser location and retry."));
+
+  document.getElementById('routeBtn').addEventListener('click', getRoutes);
+
+  async function getRoutes() {
+    const destText = document.getElementById('destination').value.trim();
+    if (!destText) return alert("Please enter a destination.");
+    if (!currentLocation) return alert("Waiting for current location... please refresh.");
+
+    // Geocode with Nominatim
+    const geocode = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destText)}`);
+    const places = await geocode.json();
+    if (!places.length) return alert("Destination not found.");
+
+    const destination = [parseFloat(places[0].lat), parseFloat(places[0].lon)];
+    if (destMarker) map.removeLayer(destMarker);
+    destMarker = L.marker(destination).addTo(map).bindPopup("Destination").openPopup();
+
+    // Clear old routes
+    routeLayers.forEach(l => map.removeLayer(l));
+    routeLayers = [];
+
+    const body = {
+      coordinates: [
+        [currentLocation[1], currentLocation[0]],
+        [destination[1], destination[0]]
+      ],
+      alternative_routes: { target_count: 3, share_factor: 0.6 },
+      instructions: false
+    };
+
+    const res = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+      method: 'POST',
+      headers: {
+        Authorization: apiKey,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!res.ok) return alert("Routing error: " + (await res.text()));
+
+    const data = await res.json();
+    if (!data.features || data.features.length === 0) return alert("No routes found.");
+
+    const colors = ['blue','red','green'];
+    let best = data.features[0];
+
+    data.features.forEach((feat, i) => {
+      const coords = feat.geometry.coordinates.map(c => [c[1], c[0]]);
+      const layer = L.polyline(coords, { color: colors[i]||'gray', weight: 6, opacity: 0.8 })
+        .addTo(map);
+      routeLayers.push(layer);
+      if (feat.properties.summary.distance < best.properties.summary.distance) best = feat;
+    });
+
+    map.fitBounds(routeLayers[0].getBounds());
+
+    const km = (best.properties.summary.distance / 1000).toFixed(2);
+    const min = Math.ceil(best.properties.summary.duration / 60);
+    speak(`Optimal route: ${km} km, approx ${min} minutes`);
+  }
+
+  function speak(text) {
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = 'en-US';
+    window.speechSynthesis.speak(utt);
+  }
+</script>
+
+</body>
+</html>
